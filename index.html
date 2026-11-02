@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>India Day Trader</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0d1322">
+<link rel="icon" href="icon-192.png">
+<style>
+:root{--bg:#eef1f6;--card:#fff;--ink:#14203a;--mute:#5b6783;--line:#d6dce8;--acc:#b85c00;--on:#fff;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1322;--card:#151d33;--ink:#e9edf7;--mute:#9aa7c4;--line:#27324f;--acc:#ffa94d;--on:#1a1100;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px 16px 40px}
+h1{font-size:1.6rem;letter-spacing:-.02em;margin:8px 0 2px}
+h2{font-size:1.05rem;margin:0 0 10px}
+p{margin:0}
+.sub{color:var(--mute)}
+.note{margin:14px 0;padding:10px 12px;border-left:4px solid var(--acc);background:var(--card);border-radius:0 8px 8px 0;font-size:.92rem}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}
+.row{display:flex;flex-wrap:wrap;gap:10px}
+.gap{margin-top:12px}
+label{display:flex;flex-direction:column;gap:4px;font-size:.88rem;color:var(--mute);flex:1 1 140px}
+input,select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;min-height:44px;width:100%}
+button{font:inherit;font-weight:600;min-height:44px;padding:0 16px;border-radius:8px;border:1px solid var(--acc);background:var(--acc);color:var(--on);cursor:pointer}
+button.alt{background:transparent;color:var(--acc)}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.status{margin-top:10px;font-size:.92rem;color:var(--mute)}
+.status.err{color:var(--bad)}
+.wrap{overflow-x:auto;margin-top:10px}
+table{border-collapse:collapse;width:100%;font-size:.88rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line)}
+th:nth-child(-n+3),td:nth-child(-n+3){text-align:left}
+th{color:var(--mute);font-weight:600}
+footer{font-size:.82rem;color:var(--mute);margin-top:18px}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>India Day Trader</h1>
+<p class="sub">Opening range scanner for your own 5-minute candle files.</p>
+</header>
+<div class="note">Historical scan of imported data. Results are reference levels from past candles, not live signals or advice.</div>
+<button id="inst" class="alt" type="button" hidden>Install app</button>
+
+<section>
+<h2>Import candles</h2>
+<label>CSV file<input id="file" type="file" accept=".csv,text/csv"></label>
+<div class="row gap"><button id="demo" class="alt" type="button">Load demo data (synthetic)</button></div>
+<p id="st" class="status" role="status">Needs headers: ticker, timestamp, open, high, low, close, volume. Optional: exchange (defaults to NSE).</p>
+</section>
+
+<section>
+<h2>Rule settings</h2>
+<div class="row">
+<label>Opening range<select id="orm"><option value="5">5 min</option><option value="15" selected>15 min</option><option value="30">30 min</option><option value="60">60 min</option></select></label>
+<label>Reward : risk<input id="rr" type="number" value="2" min="0.5" step="0.5" inputmode="decimal"></label>
+<label>Capital (₹)<input id="cap" type="number" value="100000" min="1000" step="1000" inputmode="numeric"></label>
+<label>Risk per trade (%)<input id="rk" type="number" value="1" min="0.1" step="0.1" inputmode="decimal"></label>
+<label>Direction<select id="side"><option value="both">Long and short</option><option value="long">Long only</option><option value="short">Short only</option></select></label>
+</div>
+<div class="row gap"><button id="go" type="button">Scan candles</button></div>
+</section>
+
+<section id="res" hidden>
+<h2>Historical setups</h2>
+<p id="sum" class="sub"></p>
+<div class="wrap" id="out"></div>
+<div class="row gap"><button id="exp" class="alt" type="button">Export CSV</button></div>
+</section>
+
+<footer>The first candle to close beyond the opening range sets the entry reference. The stop is the opposite side of the range and the target is the reward : risk multiple. Quantity is illustrative: it ignores costs, slippage, liquidity, circuit limits, lot sizes and capital availability. The rule has not been validated for profitability. Verify every price with a broker or exchange-approved source, and use only data you are licensed to use.</footer>
+</main>
+<script>
+const $=id=>document.getElementById(id),f=x=>x.toFixed(2);
+const hm=m=>String(m/60|0).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+const pl=(n,w)=>n+' '+w+(n==1?'':'s');
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const TS=/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/;
+const NEED=['ticker','timestamp','open','high','low','close','volume'];
+const COLS=['date','ticker','exchange','setup','or_high','or_low','entry_candle','entry_reference','stop','target','quantity','risk_inr'];
+const DEMO=['ticker,timestamp,open,high,low,close,volume',
+'DEMO,2026-11-02T09:15:00+05:30,100,101,99.5,100.5,1000','DEMO,2026-11-02T09:20:00+05:30,100.5,101.2,100.2,101,900',
+'DEMO,2026-11-02T09:25:00+05:30,101,101.5,100.4,100.8,800','DEMO,2026-11-02T09:30:00+05:30,100.8,101.4,100.6,101.2,700',
+'DEMO,2026-11-02T09:35:00+05:30,101.2,102.3,101.1,102.1,1500','DEMO,2026-11-02T09:40:00+05:30,102.1,103,101.9,102.8,1200',
+'DEMO2,2026-11-02T09:15:00+05:30,200,201,199,199.5,2000','DEMO2,2026-11-02T09:20:00+05:30,199.5,200.5,198.8,199.2,1800',
+'DEMO2,2026-11-02T09:25:00+05:30,199.2,199.8,198.5,199,1600','DEMO2,2026-11-02T09:30:00+05:30,199,199.2,197.2,197.6,2500'].join('\n');
+let candles=[],results=[];
+
+function say(t,err){const s=$('st');s.textContent=t;s.className='status'+(err?' err':'')}
+
+function parseCSV(text){
+  const rows=[];let row=[],v='',q=false;
+  const end=()=>{row.push(v);v='';if(row.some(x=>x.trim()!==''))rows.push(row);row=[]};
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(q){if(c=='"'){if(text[i+1]=='"'){v+='"';i++}else q=false}else v+=c}
+    else if(c=='"')q=true;
+    else if(c==','){row.push(v);v=''}
+    else if(c=='\n'||c=='\r'){if(c=='\r'&&text[i+1]=='\n')i++;end()}
+    else v+=c;
+  }
+  end();return rows;
+}
+
+function load(text,name){
+  results=[];$('res').hidden=true;
+  const rows=parseCSV(text.replace(/^\uFEFF/,''));
+  if(!rows.length){candles=[];return say('The file is empty.',1)}
+  const hd=rows.shift().map(x=>x.trim().toLowerCase());
+  const miss=NEED.filter(k=>!hd.includes(k));
+  if(miss.length){candles=[];return say('Missing headers: '+miss.join(', ')+'. Required: '+NEED.join(', ')+'.',1)}
+  const ix=k=>hd.indexOf(k),out=[];let bad=0,tz=0;
+  for(const r of rows){
+    const ts=(r[ix('timestamp')]||'').trim(),m=TS.exec(ts);
+    const o=+r[ix('open')],hi=+r[ix('high')],lo=+r[ix('low')],c=+r[ix('close')],vol=+r[ix('volume')];
+    const t=(r[ix('ticker')]||'').trim().toUpperCase();
+    if(!m||!t||[o,hi,lo,c].some(x=>!isFinite(x)||x<=0)||hi<Math.max(o,c,lo)||lo>Math.min(o,c,hi)||!isFinite(vol)){bad++;continue}
+    const z=/(Z|[+-]\d{2}:?\d{2})$/.exec(ts);if(z&&!/^\+05:?30$/.test(z[1]))tz++;
+    const ex=ix('exchange')>=0?(r[ix('exchange')]||'').trim().toUpperCase():'';
+    out.push({t,ex:ex||'NSE',d:m[1],min:+m[2]*60+ +m[3],o,h:hi,l:lo,c});
+  }
+  candles=out;
+  if(!out.length)return say('No valid candle rows found. Check the timestamp format, e.g. 2026-11-02T09:15:00+05:30.',1);
+  const days=new Set(out.map(c=>c.d)).size,tk=new Set(out.map(c=>c.t)).size;
+  let msg=name+': '+pl(out.length,'candle')+', '+pl(tk,'ticker')+', '+pl(days,'day')+'.';
+  if(bad)msg+=' '+pl(bad,'invalid row')+' skipped.';
+  if(tz)msg+=' '+pl(tz,'row')+' carry a non-IST offset; times are read as written.';
+  say(msg,0);
+}
+
+function scan(){
+  if(!candles.length)return say('Import a CSV file or load the demo data first.',1);
+  const orMin=+$('orm').value,rr=+$('rr').value,cap=+$('cap').value,rk=+$('rk').value,side=$('side').value;
+  if(!(rr>0&&cap>0&&rk>0))return say('Enter positive numbers for reward : risk, capital and risk per trade.',1);
+  const open=555,end=open+orMin,g={};
+  for(const c of candles)(g[c.t+'|'+c.ex+'|'+c.d]=g[c.t+'|'+c.ex+'|'+c.d]||[]).push(c);
+  results=[];let skipped=0;
+  for(const k in g){
+    const a=g[k].sort((x,y)=>x.min-y.min);
+    const orc=a.filter(c=>c.min>=open&&c.min<end);
+    if(orc.length<orMin/5){skipped++;continue}
+    const H=Math.max(...orc.map(c=>c.h)),L=Math.min(...orc.map(c=>c.l));
+    for(const c of a){
+      if(c.min<end)continue;
+      const long=c.c>H&&side!='short',short=c.c<L&&side!='long';
+      if(!long&&!short)continue;
+      const e=c.c,stop=long?L:H,risk=Math.abs(e-stop);
+      const q=Math.min(Math.floor(cap*rk/100/risk),Math.floor(cap/e));
+      results.push({date:c.d,ticker:c.t,exchange:c.ex,setup:long?'Long':'Short',or_high:H,or_low:L,entry_candle:hm(c.min),entry_reference:e,stop,target:long?e+rr*risk:e-rr*risk,quantity:q,risk_inr:q*risk});
+      break;
+    }
+  }
+  results.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.ticker<b.ticker?-1:1);
+  show(skipped);
+}
+
+function show(skipped){
+  $('res').hidden=false;
+  const n=results.length;
+  $('exp').hidden=!n;
+  const sk=skipped?' '+pl(skipped,'ticker-day')+' skipped: incomplete opening range.':'';
+  if(!n){$('sum').textContent='No breakouts found with these settings.'+sk;$('out').innerHTML='';return}
+  $('sum').textContent=pl(n,'historical setup')+' from '+pl(new Set(results.map(r=>r.ticker)).size,'ticker')+'.'+sk;
+  $('out').innerHTML='<table><thead><tr><th>Date</th><th>Ticker</th><th>Setup</th><th>Candle</th><th>Entry ref</th><th>Stop</th><th>Target</th><th>Qty</th><th>Risk ₹</th></tr></thead><tbody>'+
+    results.map(r=>'<tr><td>'+r.date+'</td><td>'+esc(r.ticker)+'</td><td>'+r.setup+'</td><td>'+r.entry_candle+'</td><td>'+f(r.entry_reference)+'</td><td>'+f(r.stop)+'</td><td>'+f(r.target)+'</td><td>'+r.quantity+'</td><td>'+f(r.risk_inr)+'</td></tr>').join('')+'</tbody></table>';
+}
+
+function exportCSV(){
+  const cell=v=>{let s=String(v);if(/^[=+\-@]/.test(s))s="'"+s;return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
+  const val=(r,k)=>k=='quantity'||typeof r[k]!='number'?r[k]:f(r[k]);
+  const csv=[COLS.join(',')].concat(results.map(r=>COLS.map(k=>cell(val(r,k))).join(','))).join('\r\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download='orb-scan-'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+
+$('file').onchange=e=>{
+  const fl=e.target.files[0];if(!fl)return;
+  const r=new FileReader();
+  r.onload=()=>load(String(r.result),fl.name);
+  r.onerror=()=>say('Could not read that file.',1);
+  r.readAsText(fl);
+};
+$('demo').onclick=()=>load(DEMO,'Demo data (synthetic)');
+$('go').onclick=scan;
+$('exp').onclick=exportCSV;
+
+let ip;
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();ip=e;$('inst').hidden=false});
+$('inst').onclick=async()=>{ip.prompt();await ip.userChoice;$('inst').hidden=true};
+if('serviceWorker'in navigator&&(location.protocol=='https:'||location.hostname=='localhost'))navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
